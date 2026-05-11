@@ -1,4 +1,5 @@
 # Register all bus drivers (one per route) to production
+# simulate-buses.py logs in with these phones (+91980000XXXX) and driver123.
 $body = @{phone="+919876543210";password="admin"} | ConvertTo-Json
 $response = Invoke-RestMethod -Uri "https://sathyabama-bus-tracker.onrender.com/api/v1/auth/login" -Method Post -ContentType "application/json" -Body $body
 $token = $response.access_token

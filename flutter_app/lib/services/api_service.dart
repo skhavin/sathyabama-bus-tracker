@@ -25,6 +25,14 @@ class ApiService {
     // Add interceptor to include auth token
     _dio.interceptors.add(InterceptorsWrapper(
       onRequest: (options, handler) async {
+        final path = options.path;
+        // Public student reads must not send a stale driver JWT (some proxies
+        // behave badly with mixed auth). Browser /map fetches these anonymously.
+        if (path.contains('/student/buses/active') ||
+            path.contains('/student/routes/all')) {
+          options.headers.remove('Authorization');
+          return handler.next(options);
+        }
         final token = await StorageService().getToken();
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';
@@ -47,6 +55,31 @@ class ApiService {
       if (decoded is Map) return Map<String, dynamic>.from(decoded);
     }
     return null;
+  }
+
+  static List<BusLocation> _parseActiveBusesPayload(dynamic body) {
+    final map = _asJsonMap(body);
+    if (map == null) return [];
+    final raw = map['buses'];
+    if (raw is! List) return [];
+    final out = <BusLocation>[];
+    for (final item in raw) {
+      if (item is! Map) continue;
+      final m = Map<String, dynamic>.from(item);
+      final lat = m['latitude'];
+      final lng = m['longitude'];
+      if (lat == null || lng == null) continue;
+      out.add(BusLocation.fromJson({
+        'bus_number': m['busNumber'] ?? m['bus_number'],
+        'route': m['route'] ?? m['routeName'] ?? '',
+        'latitude': lat,
+        'longitude': lng,
+        'speed': m['speed'],
+        'last_update': m['lastUpdate'] ?? m['last_update'],
+        'status': m['status'] ?? 'active',
+      }));
+    }
+    return out;
   }
 
   static List<Map<String, dynamic>> _parseRoutesPayload(dynamic body) {
@@ -176,24 +209,17 @@ class ApiService {
       final response = await _dio.get('/student/buses/active');
 
       if (response.statusCode == 200) {
-        final List<dynamic> data = response.data['buses'] ?? [];
-        return data.map((json) {
-          // Convert camelCase to snake_case for the model
-          return BusLocation.fromJson({
-            'bus_number': json['busNumber'],
-            'route': json['route'],
-            'latitude': json['latitude'],
-            'longitude': json['longitude'],
-            'speed': json['speed'],
-            'last_update': json['lastUpdate'],
-            'status': json['status'],
-          });
-        }).toList();
+        return _parseActiveBusesPayload(response.data);
       }
       return [];
     } on DioException catch (e) {
       if (AppConfig.enableLogging) {
         print('Failed to fetch buses: ${e.message}');
+      }
+      return [];
+    } catch (e, st) {
+      if (AppConfig.enableLogging) {
+        print('Failed to parse active buses: $e\n$st');
       }
       return [];
     }

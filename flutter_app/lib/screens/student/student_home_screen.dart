@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
@@ -17,6 +19,15 @@ import '../../models/bus_location.dart';
 import '../../models/tracked_bus.dart';
 import '../../models/pinned_bus.dart';
 import '../settings_screen.dart';
+
+/// DB routes may use `TN01AA0027` while simulators/drivers use `TN01AA27`.
+/// Align with how `/map` shows every live cache entry.
+String _normalizeBusPlate(String v) {
+  final s = v.trim().toUpperCase();
+  final m = RegExp(r'^(TN\d{2}AA)(\d+)$').firstMatch(s);
+  if (m == null) return s;
+  return '${m.group(1)}${int.parse(m.group(2)!)}';
+}
 
 class StudentHomeScreen extends StatefulWidget {
   const StudentHomeScreen({super.key});
@@ -43,6 +54,8 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   final Set<String> _nearNotifiedBuses = {};
   bool _isConnected = true;
   DateTime? _lastSuccessfulUpdate;
+  /// Avoids spamming the console every refresh tick when counts are unchanged.
+  String? _lastRoutesLogSignature;
 
   static const double defaultLatitude = 12.9716;
   static const double defaultLongitude = 80.2476;
@@ -98,32 +111,25 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
       
       // Get all routes from database
       final allRoutes = await ApiService().getAllRoutes();
-      
-      // Convert all routes to BusLocation format
-      final allBuses = allRoutes.map((route) {
-        final busNumber = route['busNumber'] ?? '';
-        final isSharingLocation = route['isSharingLocation'] == true;
-        
-        print('📍 Bus $busNumber - isSharingLocation: $isSharingLocation');
-        
-        // Check if this bus is currently active (sharing location)
-        final activeBus = activeBuses.firstWhere(
-          (b) => b.busNumber == busNumber,
-          orElse: () => BusLocation(
-            busNumber: '',
-            route: '',
-            latitude: 0,
-            longitude: 0,
-            speed: 0,
-            lastUpdate: DateTime.now(),
-            status: 'offline',
-          ),
-        );
-        
-        // If bus is actively sharing location, use its real data
-        if (activeBus.busNumber.isNotEmpty) {
-          print('✅ Bus $busNumber is active with location data');
-          return BusLocation(
+
+      BusLocation? activeForRoutePlate(String routeBus) {
+        final key = _normalizeBusPlate(routeBus);
+        for (final b in activeBuses) {
+          if (_normalizeBusPlate(b.busNumber) == key) return b;
+        }
+        return null;
+      }
+
+      final matchedActiveKeys = <String>{};
+      final allBuses = <BusLocation>[];
+
+      for (final route in allRoutes) {
+        final busNumber = '${route['busNumber'] ?? ''}';
+        final activeBus = activeForRoutePlate(busNumber);
+
+        if (activeBus != null) {
+          matchedActiveKeys.add(_normalizeBusPlate(activeBus.busNumber));
+          allBuses.add(BusLocation(
             busNumber: busNumber,
             route: route['routeName'] ?? '',
             latitude: activeBus.latitude,
@@ -131,23 +137,46 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
             speed: activeBus.speed,
             lastUpdate: activeBus.lastUpdate,
             status: 'active',
-          );
+          ));
         } else {
-          // Bus exists in database but not sharing location
-          print('❌ Bus $busNumber is offline');
-          return BusLocation(
+          allBuses.add(BusLocation(
             busNumber: busNumber,
             route: route['routeName'] ?? '',
-            latitude: 12.9716, // Default location (won't show on map)
+            latitude: 12.9716,
             longitude: 80.2476,
             speed: 0,
             lastUpdate: DateTime.now(),
             status: 'offline',
-          );
+          ));
         }
-      }).toList();
+      }
+
+      // Live buses in cache that are not on the route list (e.g. simulator IDs)
+      for (final ab in activeBuses) {
+        final key = _normalizeBusPlate(ab.busNumber);
+        if (matchedActiveKeys.contains(key)) continue;
+        matchedActiveKeys.add(key);
+        allBuses.add(BusLocation(
+          busNumber: ab.busNumber,
+          route: ab.route.isNotEmpty ? ab.route : 'Live (not in route list)',
+          latitude: ab.latitude,
+          longitude: ab.longitude,
+          speed: ab.speed,
+          lastUpdate: ab.lastUpdate,
+          status: 'active',
+        ));
+      }
       
       if (mounted) {
+        final activeCount =
+            allBuses.where((b) => b.status == 'active').length;
+        final sig = '${allRoutes.length}|$activeCount';
+        if (kDebugMode && sig != _lastRoutesLogSignature) {
+          _lastRoutesLogSignature = sig;
+          print(
+            '🚌 Routes loaded: ${allRoutes.length} buses, $activeCount sharing live location',
+          );
+        }
         setState(() {
           _activeBuses = allBuses;
           _filteredBuses = allBuses;
@@ -393,40 +422,20 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
 
   Future<void> _getCurrentLocation() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        print('⚠️ Location services are disabled');
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          print('⚠️ Location permission denied');
-          return;
+      final position = await LocationService().getCurrentPosition();
+      if (!mounted || position == null) {
+        if (mounted && position == null) {
+          print('⚠️ No GPS fix yet (permission off, timeout, or services disabled)');
         }
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        print('⚠️ Location permission denied forever');
         return;
       }
 
-      Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-
-      if (mounted) {
-        setState(() {
-          _studentLocation = LatLng(position.latitude, position.longitude);
-          _currentPosition = position;
-        });
-
-        // Center map on student location
-        _mapController.move(_studentLocation, 15.0);
-        print('✅ Initial student location: ${position.latitude}, ${position.longitude}');
-      }
+      setState(() {
+        _studentLocation = LatLng(position.latitude, position.longitude);
+        _currentPosition = position;
+      });
+      _mapController.move(_studentLocation, 15.0);
+      print('✅ Initial student location: ${position.latitude}, ${position.longitude}');
     } catch (e) {
       print('❌ Error getting initial location: $e');
     }
@@ -506,7 +515,9 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
   Widget build(BuildContext context) {
     final themeManager = Provider.of<ThemeManager>(context);
     final isDark = themeManager.isDarkMode;
-    
+    final liveBusCount =
+        _activeBuses.where((b) => b.status == 'active').length;
+
     return Scaffold(
       backgroundColor: themeManager.backgroundColor,
       body: Stack(
@@ -526,6 +537,10 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                     ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
                     : osmTileUrl,
                 subdomains: const ['a', 'b', 'c', 'd'],
+                tileProvider:
+                    kIsWeb ? CancellableNetworkTileProvider() : null,
+                retinaMode:
+                    isDark ? RetinaMode.isHighDensity(context) : null,
                 userAgentPackageName: 'com.example.sathyabama_bus_tracker',
                 additionalOptions: const {
                   'attribution': '© OpenStreetMap contributors © CARTO',
@@ -671,6 +686,21 @@ class _StudentHomeScreenState extends State<StudentHomeScreen> {
                                     ),
                                   ],
                                 ),
+                                if (_isConnected && _activeBuses.isNotEmpty) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    liveBusCount == 0
+                                        ? 'No live buses — a driver must start a shift to share GPS'
+                                        : '$liveBusCount live on map',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: AppleTypography.caption2.copyWith(
+                                      color: AppleColors.white
+                                          .withValues(alpha: 0.78),
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),

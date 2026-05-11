@@ -6,6 +6,13 @@ Exact schemas from openapi.json:
   LocationUpdateRequest: { bus_number: str, latitude: float, longitude: float,
                            speed: float, heading: float=0, accuracy: float=10 }
 
+DB seeding (same production IDs / phones as these repo scripts):
+  - add_production_drivers.ps1   → driver logins (+91980000XXXX / driver123)
+  - add_production_routes.ps1    → vehicle_no on each route (TN01AA00XX)
+
+vehicle_no and route_no below MUST match add_production_routes.ps1 so
+start-shift succeeds and the Flutter student map joins live data to routes.
+
 Flow:
   1. POST /api/v1/auth/login
   2. POST /api/v1/driver/start-shift      (best-effort, non-fatal)
@@ -14,7 +21,7 @@ Flow:
 
 Usage:
     pip install requests
-    python simulate_buses.py
+    python simulate-buses.py
 """
 
 import requests, threading, time, math, random, sys
@@ -23,21 +30,22 @@ from datetime import datetime
 BASE_URL        = "https://sathyabama-bus-tracker.onrender.com/api/v1"
 UPDATE_INTERVAL = 5   # seconds
 
-# vehicle_no must match what was registered via add_all_routes.ps1 → TN01AAXX
+# vehicle_no + route_no + phone: same rows as add_production_routes.ps1 /
+# add_production_drivers.ps1 (production Render host).
 BUSES = [
-    {"route_no":"27",  "vehicle_no":"TN01AA27",  "label":"Bus 27  – TAMBARAM",        "phone":"+919800000056","password":"driver123",
+    {"route_no":"27",  "vehicle_no":"TN01AA0056", "label":"Bus 27  – TAMBARAM",         "phone":"+919800000056","password":"driver123",
      "waypoints":[(12.9249,80.1000),(12.9320,80.1120),(12.9450,80.1250),(12.9560,80.1350),(12.9620,80.1480),(12.9700,80.1600),(12.9800,80.1750),(12.9870,80.1980)]},
-    {"route_no":"14A", "vehicle_no":"TN01AA14A", "label":"Bus 14A – T.NAGAR",          "phone":"+919800000029","password":"driver123",
+    {"route_no":"14A", "vehicle_no":"TN01AA0029", "label":"Bus 14A – T.NAGAR",          "phone":"+919800000029","password":"driver123",
      "waypoints":[(13.0418,80.2341),(13.0350,80.2450),(13.0260,80.2530),(13.0150,80.2480),(13.0050,80.2400),(12.9950,80.2300),(12.9900,80.2150),(12.9870,80.1980)]},
-    {"route_no":"9B",  "vehicle_no":"TN01AA9B",  "label":"Bus 9B  – THIRUVANMIYUR",   "phone":"+919800000091","password":"driver123",
+    {"route_no":"9B",  "vehicle_no":"TN01AA0091", "label":"Bus 9B  – THIRUVANMIYUR",    "phone":"+919800000091","password":"driver123",
      "waypoints":[(12.9828,80.2572),(12.9820,80.2450),(12.9810,80.2300),(12.9800,80.2150),(12.9790,80.2050),(12.9810,80.2000),(12.9850,80.1990),(12.9870,80.1980)]},
-    {"route_no":"6",   "vehicle_no":"TN01AA6",   "label":"Bus 6   – ENNORE",           "phone":"+919800000080","password":"driver123",
+    {"route_no":"6",   "vehicle_no":"TN01AA0080", "label":"Bus 6   – ENNORE",           "phone":"+919800000080","password":"driver123",
      "waypoints":[(13.2144,80.3196),(13.1800,80.3000),(13.1400,80.2800),(13.1000,80.2600),(13.0600,80.2400),(13.0200,80.2200),(13.0000,80.2100),(12.9870,80.1980)]},
-    {"route_no":"8",   "vehicle_no":"TN01AA8",   "label":"Bus 8   – VALLUVAR KOTTAM", "phone":"+919800000087","password":"driver123",
+    {"route_no":"8",   "vehicle_no":"TN01AA0087", "label":"Bus 8   – VALLUVAR KOTTAM",  "phone":"+919800000087","password":"driver123",
      "waypoints":[(13.0545,80.2491),(13.0450,80.2400),(13.0350,80.2350),(13.0250,80.2280),(13.0150,80.2200),(13.0050,80.2100),(12.9950,80.2050),(12.9870,80.1980)]},
-    {"route_no":"22",  "vehicle_no":"TN01AA22",  "label":"Bus 22  – NARAYANAPURAM",   "phone":"+919800000049","password":"driver123",
+    {"route_no":"22",  "vehicle_no":"TN01AA0049", "label":"Bus 22  – NARAYANAPURAM",    "phone":"+919800000049","password":"driver123",
      "waypoints":[(12.9100,80.2300),(12.9200,80.2250),(12.9350,80.2150),(12.9480,80.2100),(12.9600,80.2050),(12.9700,80.2020),(12.9800,80.2000),(12.9870,80.1980)]},
-    {"route_no":"3A",  "vehicle_no":"TN01AA3A",  "label":"Bus 3A  – GUDUVANCHERRY",   "phone":"+919800000072","password":"driver123",
+    {"route_no":"3A",  "vehicle_no":"TN01AA0072", "label":"Bus 3A  – GUDUVANCHERRY",    "phone":"+919800000072","password":"driver123",
      "waypoints":[(12.8485,80.0714),(12.8700,80.0900),(12.8900,80.1100),(12.9100,80.1300),(12.9300,80.1500),(12.9500,80.1700),(12.9700,80.1850),(12.9870,80.1980)]},
 ]
 

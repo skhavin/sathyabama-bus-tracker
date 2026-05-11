@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_cancellable_tile_provider/flutter_map_cancellable_tile_provider.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../config/apple_theme.dart';
@@ -181,6 +183,9 @@ class _DriverTrackingScreenState extends State<DriverTrackingScreen> {
               TileLayer(
                 urlTemplate: osmTileUrl,
                 subdomains: const ['a', 'b', 'c'],
+                tileProvider:
+                    kIsWeb ? CancellableNetworkTileProvider() : null,
+                userAgentPackageName: 'com.example.sathyabama_bus_tracker',
               ),
               MarkerLayer(
                 markers: [

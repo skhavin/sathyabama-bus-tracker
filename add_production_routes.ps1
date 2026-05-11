@@ -1,4 +1,5 @@
 # Add all Sathyabama bus routes to production
+# Live GPS sim: simulate-buses.py (repo root) uses the same vehicle_no + route_no + phone per row.
 # Login as admin
 $body = @{phone="+919876543210";password="admin"} | ConvertTo-Json
 $response = Invoke-RestMethod -Uri "https://sathyabama-bus-tracker.onrender.com/api/v1/auth/login" -Method Post -ContentType "application/json" -Body $body
