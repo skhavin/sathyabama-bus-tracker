@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import '../config/constants.dart';
 import '../models/api_response.dart';
@@ -34,6 +36,32 @@ class ApiService {
 
   late final Dio _dio;
   String? _currentBusNumber;
+
+  /// Normalize API JSON to a [Map] (handles String body and non-Dart map types on web).
+  static Map<String, dynamic>? _asJsonMap(dynamic data) {
+    if (data == null) return null;
+    if (data is Map<String, dynamic>) return data;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    if (data is String) {
+      final decoded = jsonDecode(data);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    }
+    return null;
+  }
+
+  static List<Map<String, dynamic>> _parseRoutesPayload(dynamic body) {
+    final map = _asJsonMap(body);
+    if (map == null) return [];
+    final raw = map['routes'];
+    if (raw is! List) return [];
+    final out = <Map<String, dynamic>>[];
+    for (final item in raw) {
+      if (item is Map) {
+        out.add(Map<String, dynamic>.from(item));
+      }
+    }
+    return out;
+  }
 
   // Authentication
   Future<LoginResponse> loginDriver(String phone, String password) async {
@@ -176,13 +204,17 @@ class ApiService {
       final response = await _dio.get('/student/routes/all');
 
       if (response.statusCode == 200) {
-        final List<dynamic> data = response.data['routes'] ?? [];
-        return data.cast<Map<String, dynamic>>();
+        return _parseRoutesPayload(response.data);
       }
       return [];
     } on DioException catch (e) {
       if (AppConfig.enableLogging) {
         print('Failed to fetch routes: ${e.message}');
+      }
+      return [];
+    } catch (e, st) {
+      if (AppConfig.enableLogging) {
+        print('Failed to parse routes: $e\n$st');
       }
       return [];
     }
